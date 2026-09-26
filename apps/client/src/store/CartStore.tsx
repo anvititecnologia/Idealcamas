@@ -347,7 +347,7 @@ const CartStoreContext = createContext<CartStoreState | null>(null);
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const store = useCartStoreState();
-  return <CartStoreContext.Provider value={store}>{children}</CartStoreContext.Provider>;
+  return <CartStoreContext.Provider value={store}> {children} </CartStoreContext.Provider>;
 }
 
 export function useCartStore(): CartStoreState {
