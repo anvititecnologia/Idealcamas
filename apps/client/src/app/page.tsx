@@ -10,7 +10,7 @@
 
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { CartProvider, useCartStore } from "../store/CartStore";
 import { ModelViewer } from "../components/ModelViewer";
 
@@ -61,10 +61,11 @@ function HomeContent() {
   const cart = useCartStore();
   const [cepInput, setCepInput] = useState("");
 
-  // ── Inicializar produto na montagem ──
-  useState(() => {
+  // ── Inicializar produto na montagem (após o DOM estar pronto) ──
+  useEffect(() => {
     cart.setProduct("prod-sofa-01", "Sofá Modular Premium", "sofa-modular-premium", 189900);
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Material overrides para o ModelViewer 3D ──
   const materialOverrides = cart.selectedMaterials.length > 0

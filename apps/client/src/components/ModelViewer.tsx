@@ -3,26 +3,20 @@
 // ──────────────────────────────────────────────────────────────────────────────
 // Componente de visualização 3D para o catálogo do cliente.
 // Responsável por:
-//   1. Carregar modelos .glb de forma assíncrona (useGLTF + Suspense)
+//   1. Renderizar geometria placeholder (até modelos .glb serem integrados)
 //   2. Controles de órbita com limites de zoom e rotação
 //   3. Iluminação otimizada para texturas de tecidos/madeiras
 //   4. Skeleton Loader elegante durante o carregamento (evita CLS)
-//   5. Auto-enquadramento do modelo na cena
-//   6. Suporte a troca dinâmica de materiais (personalização)
+//   5. Suporte a troca dinâmica de cor via materialOverrides
 // ──────────────────────────────────────────────────────────────────────────────
 
 "use client";
 
-import { Suspense, useRef, useEffect, useState, useCallback } from "react";
-import { Canvas, useThree, useFrame } from "@react-three/fiber";
+import { Suspense, useState, useCallback } from "react";
+import { Canvas } from "@react-three/fiber";
 import {
   OrbitControls,
-  useGLTF,
-  Environment,
   ContactShadows,
-  Center,
-  Bounds,
-  useBounds,
   Html,
   useProgress,
 } from "@react-three/drei";
@@ -33,8 +27,8 @@ import * as THREE from "three";
 // └──────────────────────────────────────────────────────────────────────┘
 
 export interface ModelViewerProps {
-  /** URL do modelo .glb (do bucket S3 ou CDN) */
-  modelUrl: string;
+  /** URL do modelo .glb (reservado para uso futuro com CDN/S3) */
+  modelUrl?: string;
   /** Mapa de materiais a trocar: { nomeDoMesh: { color?, map? } } */
   materialOverrides?: Record<
     string,
@@ -62,7 +56,7 @@ export interface ModelViewerProps {
 
 // ┌──────────────────────────────────────────────────────────────────────┐
 // │  SKELETON LOADER                                                    │
-// │  Exibido enquanto o modelo carrega — evita CLS                     │
+// │  Exibido enquanto o Canvas monta — evita CLS                       │
 // └──────────────────────────────────────────────────────────────────────┘
 
 function ModelSkeleton() {
@@ -112,129 +106,20 @@ function ModelSkeleton() {
 }
 
 // ┌──────────────────────────────────────────────────────────────────────┐
-// │  MODELO 3D (carregado assincronamente)                             │
+// │  PLACEHOLDER GEOMÉTRICO                                             │
+// │  Renderizado enquanto modelos .glb não estão disponíveis            │
 // └──────────────────────────────────────────────────────────────────────┘
 
-interface ModelProps {
-  url: string;
-  materialOverrides?: ModelViewerProps["materialOverrides"];
-  xRayMode?: boolean;
-  onLoaded?: () => void;
+interface PlaceholderModelProps {
+  color?: string;
 }
 
-function Model({ url, materialOverrides, xRayMode, onLoaded }: ModelProps) {
-  const { scene } = useGLTF(url);
-  const modelRef = useRef<THREE.Group>(null);
-  const bounds = useBounds();
-
-  // ── Auto-enquadrar quando o modelo carrega ──
-  useEffect(() => {
-    if (modelRef.current && bounds) {
-      // Fit do modelo no viewport com margem
-      bounds.refresh(modelRef.current).clip().fit();
-    }
-    onLoaded?.();
-  }, [scene, bounds, onLoaded]);
-
-  // ── Aplicar overrides de materiais (personalização dinâmica) ──
-  useEffect(() => {
-    if (!materialOverrides) return;
-
-    scene.traverse((child) => {
-      if (child instanceof THREE.Mesh && child.name in (materialOverrides || {})) {
-        const override = materialOverrides[child.name];
-        const material = child.material as THREE.MeshStandardMaterial;
-
-        if (override.color) {
-          material.color.set(override.color);
-        }
-
-        // Atualizar material para refletir mudanças
-        material.needsUpdate = true;
-      }
-    });
-  }, [scene, materialOverrides]);
-
-  // ── Modo Raio-X: transparência nas camadas ──
-  useEffect(() => {
-    scene.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        const material = child.material as THREE.MeshStandardMaterial;
-
-        if (xRayMode) {
-          material.transparent = true;
-          material.opacity = 0.35;
-          material.wireframe = false;
-          material.depthWrite = false;
-        } else {
-          material.transparent = false;
-          material.opacity = 1;
-          material.depthWrite = true;
-        }
-
-        material.needsUpdate = true;
-      }
-    });
-  }, [scene, xRayMode]);
-
+function PlaceholderModel({ color = "#8a735c" }: PlaceholderModelProps) {
   return (
-    <group ref={modelRef}>
-      <primitive object={scene} dispose={null} />
-    </group>
-  );
-}
-
-// ┌──────────────────────────────────────────────────────────────────────┐
-// │  ILUMINAÇÃO DE ESTÚDIO                                             │
-// │  Otimizada para destacar texturas de tecidos e madeiras            │
-// └──────────────────────────────────────────────────────────────────────┘
-
-interface StudioLightingProps {
-  ambientIntensity: number;
-}
-
-function StudioLighting({ ambientIntensity }: StudioLightingProps) {
-  return (
-    <>
-      {/* Luz ambiente suave */}
-      <ambientLight intensity={ambientIntensity} color="#faf5ef" />
-
-      {/* Luz principal (key light) — simula janela grande */}
-      <directionalLight
-        position={[5, 8, 5]}
-        intensity={1.2}
-        color="#fff8f0"
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-        shadow-camera-far={50}
-        shadow-camera-left={-10}
-        shadow-camera-right={10}
-        shadow-camera-top={10}
-        shadow-camera-bottom={-10}
-      />
-
-      {/* Luz de preenchimento (fill light) — suaviza sombras */}
-      <directionalLight
-        position={[-4, 4, -3]}
-        intensity={0.4}
-        color="#e8e0d8"
-      />
-
-      {/* Luz de contorno (rim light) — destaca silhueta */}
-      <directionalLight
-        position={[0, 3, -6]}
-        intensity={0.3}
-        color="#d4c5b0"
-      />
-
-      {/* Luz pontual inferior — ilumina base do móvel */}
-      <pointLight
-        position={[0, -2, 3]}
-        intensity={0.15}
-        color="#f5ebe0"
-        distance={15}
-      />
-    </>
+    <mesh castShadow receiveShadow>
+      <boxGeometry args={[2, 1, 1]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
   );
 }
 
@@ -270,66 +155,26 @@ function ExternalSkeleton({ height }: { height: number | string }) {
 // └──────────────────────────────────────────────────────────────────────┘
 
 export function ModelViewer({
-  modelUrl,
   materialOverrides,
   xRayMode = false,
   backgroundColor = "#faf8f5",
-  ambientIntensity = 0.6,
+  ambientIntensity = 0.5,
   className = "",
   onModelLoaded,
-  onModelError,
   height = 500,
   showShadow = true,
   autoRotate = true,
 }: ModelViewerProps) {
   const [isCanvasReady, setIsCanvasReady] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
 
   const handleCreated = useCallback(() => {
     setIsCanvasReady(true);
-  }, []);
+    onModelLoaded?.();
+  }, [onModelLoaded]);
 
-  const handleError = useCallback(
-    (err: Error) => {
-      setError(err);
-      onModelError?.(err);
-    },
-    [onModelError]
-  );
-
-  // ── Estado de erro ──
-  if (error) {
-    return (
-      <div
-        className={`flex items-center justify-center rounded-2xl border-2 border-dashed border-red-200 bg-red-50 ${className}`}
-        style={{ height }}
-      >
-        <div className="text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
-            <svg
-              className="h-6 w-6 text-red-600"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
-              />
-            </svg>
-          </div>
-          <p className="text-sm font-medium text-red-800">
-            Falha ao carregar modelo 3D
-          </p>
-          <p className="mt-1 text-xs text-red-600">
-            {error.message || "Verifique a URL do modelo"}
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // ── Extrair cor do override para o placeholder ──
+  const meshColor =
+    materialOverrides?.["sofa-body"]?.color || "#8a735c";
 
   return (
     <div className={`relative overflow-hidden rounded-2xl ${className}`} style={{ height }}>
@@ -354,29 +199,18 @@ export function ModelViewer({
         shadows
       >
         {/* ── Iluminação ── */}
-        <StudioLighting ambientIntensity={ambientIntensity} />
+        <ambientLight intensity={ambientIntensity} />
+        <directionalLight position={[5, 5, 5]} intensity={1} castShadow />
 
-        {/* ── Environment Map — reflexos sutis em madeira/tecido ── */}
-        <Environment preset="apartment" environmentIntensity={0.3} />
-
-        {/* ── Modelo 3D com auto-enquadramento ── */}
+        {/* ── Placeholder Geométrico ── */}
         <Suspense fallback={<ModelSkeleton />}>
-          <Bounds fit clip observe margin={1.4}>
-            <Center>
-              <Model
-                url={modelUrl}
-                materialOverrides={materialOverrides}
-                xRayMode={xRayMode}
-                onLoaded={onModelLoaded}
-              />
-            </Center>
-          </Bounds>
+          <PlaceholderModel color={meshColor} />
         </Suspense>
 
         {/* ── Sombra de contato no chão ── */}
         {showShadow && (
           <ContactShadows
-            position={[0, -0.01, 0]}
+            position={[0, -0.51, 0]}
             opacity={0.4}
             scale={12}
             blur={2.5}
@@ -422,17 +256,4 @@ export function ModelViewer({
       </div>
     </div>
   );
-}
-
-// ┌──────────────────────────────────────────────────────────────────────┐
-// │  PRE-LOAD                                                           │
-// └──────────────────────────────────────────────────────────────────────┘
-
-/**
- * Pré-carrega um modelo GLB para cache do Three.js.
- * Chame nos eventos onMouseEnter do card do catálogo para
- * reduzir o tempo de carregamento ao abrir o viewer.
- */
-export function preloadModel(url: string): void {
-  useGLTF.preload(url);
 }
