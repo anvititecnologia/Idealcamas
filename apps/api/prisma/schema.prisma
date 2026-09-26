@@ -1,0 +1,414 @@
+// ──────────────────────────────────────────────────────────────────────────────
+// Ideal Camas — Prisma Schema (Fase 1)
+// ──────────────────────────────────────────────────────────────────────────────
+// Cobre: Produtos, Materiais, Componentes, Uploads seguros, Usuários (RBAC),
+//        Orçamentos, Frete e Trilha de Auditoria imutável.
+// ──────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  ENUMS                                                              │
+// └──────────────────────────────────────────────────────────────────────┘
+
+enum UserRole {
+  FABRICANTE // Acesso total: catálogo, preços, relatórios
+  VENDEDOR   // Somente leitura: orçamentos e relatórios
+}
+
+enum ProductCategory {
+  SOFA
+  CAMA
+  ALMOFADA
+  TRAVESSEIRO
+}
+
+enum UploadStatus {
+  PENDING    // Upload recebido, aguardando validação
+  VALIDATED  // Passou inspeção de Magic Number + MIME
+  REJECTED   // Falhou na validação
+  QUARANTINE // Movido para quarentena
+}
+
+enum UploadType {
+  MODEL_3D    // .glb / .gltf
+  TEXTURE     // .jpg / .png / .webp
+  THUMBNAIL   // Imagens de catálogo
+}
+
+enum AuditAction {
+  PRICE_UPDATE
+  PRODUCT_CREATE
+  PRODUCT_UPDATE
+  PRODUCT_DELETE
+  MATERIAL_UPDATE
+  COMPONENT_UPDATE
+  USER_LOGIN
+  USER_LOGOUT
+  UPLOAD_CREATE
+  UPLOAD_REJECT
+  CONFIG_UPDATE
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  USUÁRIOS (Admin) — RBAC                                           │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String    @map("password_hash")
+  role         UserRole  @default(VENDEDOR)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  lastLoginIp  String?   @map("last_login_ip")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relações
+  auditLogs AuditLog[]
+  uploads   Upload[]
+
+  @@map("users")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  PRODUTO BASE                                                       │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model Product {
+  id          String          @id @default(cuid())
+  slug        String          @unique
+  name        String
+  description String?
+  category    ProductCategory
+  isActive    Boolean         @default(true) @map("is_active")
+
+  // ── Preço Base (Zero Trust — calculado server-side) ──
+  basePriceCents Int @map("base_price_cents") // Armazenado em centavos para evitar float
+
+  // ── Dimensões Padrão (cm) — extraídas das imagens de referência ──
+  defaultWidthCm  Float @map("default_width_cm")
+  defaultDepthCm  Float @map("default_depth_cm")
+  defaultHeightCm Float @map("default_height_cm")
+
+  // ── Limites Paramétricos (travas anatômicas) ──
+  minWidthCm  Float @map("min_width_cm")
+  maxWidthCm  Float @map("max_width_cm")
+  minDepthCm  Float @map("min_depth_cm")
+  maxDepthCm  Float @map("max_depth_cm")
+  minHeightCm Float @map("min_height_cm")
+  maxHeightCm Float @map("max_height_cm")
+
+  // ── Dimensões específicas por tipo ──
+  // Sofá: altura do assento, profundidade do assento, largura do braço
+  seatHeightCm Float? @map("seat_height_cm")
+  seatDepthCm  Float? @map("seat_depth_cm")
+  armWidthCm   Float? @map("arm_width_cm")
+
+  // Cama: altura da cabeceira, altura do estrado
+  headboardHeightCm Float? @map("headboard_height_cm")
+  frameHeightCm     Float? @map("frame_height_cm")
+
+  // ── Peso para cálculo de frete (kg) ──
+  weightKg Float @map("weight_kg")
+
+  // ── Metadados 3D ──
+  modelUploadId     String? @unique @map("model_upload_id")
+  thumbnailUploadId String? @map("thumbnail_upload_id")
+
+  // ── Flags de personalização ──
+  allowsPetFriendly  Boolean @default(false) @map("allows_pet_friendly")
+  allowsRetractable  Boolean @default(false) @map("allows_retractable")
+  allowsXRayView     Boolean @default(false) @map("allows_xray_view")
+  allowsChaise       Boolean @default(false) @map("allows_chaise")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relações
+  modelUpload     Upload?            @relation("ProductModel", fields: [modelUploadId], references: [id])
+  thumbnailUpload Upload?            @relation("ProductThumbnail", fields: [thumbnailUploadId], references: [id])
+  components      ProductComponent[]
+  materials       ProductMaterial[]
+  layers          ProductLayer[]
+  quotes          QuoteItem[]
+
+  @@index([category, isActive])
+  @@index([slug])
+  @@map("products")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  COMPONENTES (braços, chaises, pés, etc.)                          │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model Component {
+  id          String @id @default(cuid())
+  slug        String @unique
+  name        String
+  description String?
+
+  // Preço adicional em centavos
+  priceCents Int @map("price_cents")
+
+  // Modelo 3D do componente individual
+  modelUploadId String? @map("model_upload_id")
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relações
+  modelUpload Upload?            @relation("ComponentModel", fields: [modelUploadId], references: [id])
+  products    ProductComponent[]
+
+  @@map("components")
+}
+
+// ── Tabela intermediária: Produto ↔ Componente ──
+model ProductComponent {
+  id          String @id @default(cuid())
+  productId   String @map("product_id")
+  componentId String @map("component_id")
+  isDefault   Boolean @default(false) @map("is_default")
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  component Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, componentId])
+  @@map("product_components")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  MATERIAIS (tecidos, espumas, madeiras)                             │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model Material {
+  id          String @id @default(cuid())
+  slug        String @unique
+  name        String
+  description String?
+  type        String // "TECIDO" | "ESPUMA" | "MADEIRA" | "PERCINTA" | "PLUMA"
+
+  // ── Preço por m² ou unidade (centavos) ──
+  pricePerUnitCents Int    @map("price_per_unit_cents")
+  priceUnit         String @default("m2") @map("price_unit") // "m2" | "kg" | "un"
+
+  // ── Textura para renderização 3D ──
+  textureUploadId String? @map("texture_upload_id")
+  colorHex        String? @map("color_hex") // Fallback de cor
+
+  // ── Propriedades do material ──
+  densityKgM3 Float?  @map("density_kg_m3") // Para espumas
+  isPetProof  Boolean @default(false) @map("is_pet_proof")
+  isWaterproof Boolean @default(false) @map("is_waterproof")
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relações
+  textureUpload Upload?           @relation("MaterialTexture", fields: [textureUploadId], references: [id])
+  products      ProductMaterial[]
+  layers        ProductLayer[]
+
+  @@index([type, isActive])
+  @@map("materials")
+}
+
+// ── Tabela intermediária: Produto ↔ Material (quais materiais são compatíveis) ──
+model ProductMaterial {
+  id         String @id @default(cuid())
+  productId  String @map("product_id")
+  materialId String @map("material_id")
+  isDefault  Boolean @default(false) @map("is_default")
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, materialId])
+  @@map("product_materials")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  CAMADAS INTERNAS (Visão Raio-X)                                   │
+// │  Baseado na referência do Travesseiro Pluma Sense                   │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model ProductLayer {
+  id         String @id @default(cuid())
+  productId  String @map("product_id")
+  materialId String @map("material_id")
+  layerName  String @map("layer_name") // Ex: "capa_externa", "espuma_d33", "percinta", "madeira"
+  sortOrder  Int    @map("sort_order") // Ordem de renderização (externo → interno)
+  thicknessCm Float @map("thickness_cm")
+  description String? // Ex: "efeito nuvem", "toque de plumas"
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, layerName])
+  @@map("product_layers")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  UPLOADS SEGUROS (Zero Trust)                                      │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model Upload {
+  id String @id @default(cuid())
+
+  // ── Metadados do arquivo ──
+  originalName   String       @map("original_name")
+  sanitizedName  String       @map("sanitized_name") // Nome limpo (sem caracteres perigosos)
+  mimeType       String       @map("mime_type")
+  sizeBytes      Int          @map("size_bytes")
+  type           UploadType
+  status         UploadStatus @default(PENDING)
+
+  // ── Localização no bucket ──
+  bucketName String  @map("bucket_name")
+  bucketKey  String  @map("bucket_key") // Caminho no S3/GCS
+  cdnUrl     String? @map("cdn_url")    // URL pública (se aprovado)
+
+  // ── Segurança ──
+  checksumSha256  String  @map("checksum_sha256")
+  detectedMime    String? @map("detected_mime")    // MIME detectado por magic number
+  validationNotes String? @map("validation_notes") // Motivo de rejeição
+
+  // ── Quem fez o upload ──
+  uploadedById String @map("uploaded_by_id")
+  uploadedByIp String @map("uploaded_by_ip")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relações
+  uploadedBy        User      @relation(fields: [uploadedById], references: [id])
+  productModels     Product[] @relation("ProductModel")
+  productThumbnails Product[] @relation("ProductThumbnail")
+  componentModels   Component[] @relation("ComponentModel")
+  materialTextures  Material[]  @relation("MaterialTexture")
+
+  @@index([status, type])
+  @@index([uploadedById])
+  @@map("uploads")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  TRILHA DE AUDITORIA — IMUTÁVEL                                    │
+// │  Registra alterações financeiras, login e operações críticas        │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  action    AuditAction
+  entity    String          // Nome da tabela afetada (ex: "products", "materials")
+  entityId  String          @map("entity_id") // ID do registro afetado
+  field     String?         // Campo alterado (ex: "base_price_cents")
+
+  // ── Valores (antes/depois) — armazenados como JSON stringified ──
+  oldValue  String?         @map("old_value")
+  newValue  String?         @map("new_value")
+
+  // ── Contexto de segurança ──
+  userId    String          @map("user_id")
+  userEmail String          @map("user_email") // Snapshot no momento da ação
+  ipAddress String          @map("ip_address")
+  userAgent String?         @map("user_agent")
+
+  // ── Timestamp imutável (sem updatedAt!) ──
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relações
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([entity, entityId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  ORÇAMENTOS (Quote) — Pré-orçamento para WhatsApp                  │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model Quote {
+  id        String @id @default(cuid())
+  hashId    String @unique @map("hash_id") // Hash público para link do WhatsApp
+
+  // ── Dados do cliente ──
+  customerName  String? @map("customer_name")
+  customerPhone String? @map("customer_phone")
+  customerCep   String? @map("customer_cep")
+
+  // ── Frete ──
+  freightCents      Int?    @map("freight_cents")
+  distanceKm        Float?  @map("distance_km")
+  originAddress     String? @map("origin_address")
+
+  // ── Totais (calculados server-side) ──
+  subtotalCents Int @default(0) @map("subtotal_cents")
+  totalCents    Int @default(0) @map("total_cents")
+
+  // ── Status ──
+  sentToWhatsApp Boolean  @default(false) @map("sent_to_whatsapp")
+  sentAt         DateTime? @map("sent_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relações
+  items QuoteItem[]
+
+  @@index([hashId])
+  @@index([createdAt])
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id      String @id @default(cuid())
+  quoteId String @map("quote_id")
+
+  productId String @map("product_id")
+
+  // ── Configuração paramétrica snapshot ──
+  configSnapshot Json @map("config_snapshot") // Dimensões, materiais, componentes escolhidos
+
+  // ── Preço unitário (calculado server-side no momento) ──
+  unitPriceCents Int @map("unit_price_cents")
+  quantity       Int @default(1)
+
+  product Product @relation(fields: [productId], references: [id])
+  quote   Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@map("quote_items")
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │  CONFIGURAÇÃO GLOBAL (frete, WhatsApp, etc.)                       │
+// └──────────────────────────────────────────────────────────────────────┘
+
+model AppConfig {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String // JSON stringified
+  label String // Descrição legível
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_config")
+}

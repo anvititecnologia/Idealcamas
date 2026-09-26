@@ -1,0 +1,31 @@
+{
+  "name": "idealcamas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ideal Camas — Catálogo Interativo 3D com CMS Administrativo",
+  "workspaces": [
+    "packages/shared",
+    "apps/client",
+    "apps/admin",
+    "apps/api"
+  ],
+  "scripts": {
+    "dev:client": "npm run dev --workspace=apps/client",
+    "dev:admin": "npm run dev --workspace=apps/admin",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev": "concurrently \"npm:dev:api\" \"npm:dev:client\" \"npm:dev:admin\"",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "db:generate": "npm run db:generate --workspace=apps/api",
+    "db:push": "npm run db:push --workspace=apps/api",
+    "db:seed": "npm run db:seed --workspace=apps/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}
