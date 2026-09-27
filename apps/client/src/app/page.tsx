@@ -60,6 +60,7 @@ const COMPONENT_OPTIONS: ComponentOption[] = [
 function HomeContent() {
   const cart = useCartStore();
   const [cepInput, setCepInput] = useState("");
+  const [phoneInput, setPhoneInput] = useState("");
 
   // ── Inicializar produto na montagem (após o DOM estar pronto) ──
   useEffect(() => {
@@ -75,6 +76,88 @@ function HomeContent() {
       },
     }
     : undefined;
+
+  // ┌──────────────────────────────────────────────────────────────────────┐
+  // │  SANITIZAÇÃO DE INPUTS                                              │
+  // └──────────────────────────────────────────────────────────────────────┘
+
+  /** Bloqueia teclas não-numéricas em inputs type="number" */
+  const blockNonNumericKeys = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      const allowed = [
+        "Backspace", "Delete", "Tab", "Escape", "Enter",
+        "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+        "Home", "End",
+      ];
+      if (allowed.includes(e.key)) return;
+      // Permitir Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X
+      if (e.ctrlKey || e.metaKey) return;
+      // Bloquear tudo que não seja dígito
+      if (!/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+      }
+    },
+    []
+  );
+
+  /** Handler para dimensões com clamping rigoroso */
+  const handleDimensionChange = useCallback(
+    (field: "widthCm" | "depthCm" | "heightCm", min: number, max: number) =>
+      (e: React.ChangeEvent<HTMLInputElement>) => {
+        const raw = e.target.value.replace(/\D/g, "");
+        if (raw === "") {
+          cart.setDimensions({ [field]: min });
+          return;
+        }
+        const num = Math.min(Math.max(Number(raw), min), max);
+        cart.setDimensions({ [field]: num });
+      },
+    [cart]
+  );
+
+  /** Handler para nome — apenas letras, espaços e acentos */
+  const handleNameChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const sanitized = e.target.value.replace(/[^a-zA-ZÀ-ÿ\s]/g, "").slice(0, 100);
+      cart.setCustomerInfo(sanitized, cart.customerPhone);
+    },
+    [cart]
+  );
+
+  /** Handler para telefone — máscara (XX) XXXXX-XXXX */
+  const handlePhoneChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const digits = e.target.value.replace(/\D/g, "").slice(0, 11);
+      let formatted = digits;
+      if (digits.length > 2) {
+        formatted = `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+      } else if (digits.length > 0) {
+        formatted = `(${digits}`;
+      }
+      if (digits.length > 7) {
+        formatted = `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+      }
+      setPhoneInput(formatted);
+      cart.setCustomerInfo(cart.customerName, digits);
+    },
+    [cart]
+  );
+
+  /** Handler para telefone — bloqueia letras/símbolos */
+  const blockNonPhoneKeys = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      const allowed = [
+        "Backspace", "Delete", "Tab", "Escape", "Enter",
+        "ArrowLeft", "ArrowRight", "Home", "End",
+      ];
+      if (allowed.includes(e.key)) return;
+      if (e.ctrlKey || e.metaKey) return;
+      if (!/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+      }
+    },
+    []
+  );
 
   // ── CEP handler ──
   const handleCepChange = useCallback(
@@ -157,11 +240,13 @@ function HomeContent() {
                 <input
                   id="dim-width"
                   type="number"
+                  inputMode="numeric"
                   min={120}
                   max={300}
                   step={5}
                   value={cart.dimensions.widthCm}
-                  onChange={(e) => cart.setDimensions({ widthCm: Number(e.target.value) })}
+                  onChange={handleDimensionChange("widthCm", 120, 300)}
+                  onKeyDown={blockNonNumericKeys}
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 focus:border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-600/20"
                 />
               </div>
@@ -172,11 +257,13 @@ function HomeContent() {
                 <input
                   id="dim-depth"
                   type="number"
+                  inputMode="numeric"
                   min={70}
                   max={120}
                   step={5}
                   value={cart.dimensions.depthCm}
-                  onChange={(e) => cart.setDimensions({ depthCm: Number(e.target.value) })}
+                  onChange={handleDimensionChange("depthCm", 70, 120)}
+                  onKeyDown={blockNonNumericKeys}
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 focus:border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-600/20"
                 />
               </div>
@@ -187,11 +274,13 @@ function HomeContent() {
                 <input
                   id="dim-height"
                   type="number"
+                  inputMode="numeric"
                   min={35}
                   max={55}
                   step={1}
                   value={cart.dimensions.heightCm}
-                  onChange={(e) => cart.setDimensions({ heightCm: Number(e.target.value) })}
+                  onChange={handleDimensionChange("heightCm", 35, 55)}
+                  onKeyDown={blockNonNumericKeys}
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 focus:border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-600/20"
                 />
               </div>
@@ -216,8 +305,8 @@ function HomeContent() {
                     type="button"
                     onClick={() => cart.toggleMaterial({ id: mat.id, name: mat.name })}
                     className={`flex flex-col items-center gap-2 rounded-xl border-2 p-3 transition-all ${isSelected
-                        ? "border-amber-600 bg-amber-50 shadow-md"
-                        : "border-stone-200 bg-stone-50 hover:border-stone-300"
+                      ? "border-amber-600 bg-amber-50 shadow-md"
+                      : "border-stone-200 bg-stone-50 hover:border-stone-300"
                       }`}
                   >
                     <div
@@ -252,8 +341,8 @@ function HomeContent() {
                     type="button"
                     onClick={() => cart.toggleComponent({ id: comp.id, name: comp.name })}
                     className={`flex w-full items-start gap-3 rounded-xl border-2 p-3 text-left transition-all ${isSelected
-                        ? "border-amber-600 bg-amber-50"
-                        : "border-stone-200 bg-stone-50 hover:border-stone-300"
+                      ? "border-amber-600 bg-amber-50"
+                      : "border-stone-200 bg-stone-50 hover:border-stone-300"
                       }`}
                   >
                     <div
@@ -293,9 +382,11 @@ function HomeContent() {
                 <input
                   id="customer-name"
                   type="text"
+                  maxLength={100}
                   value={cart.customerName}
-                  onChange={(e) => cart.setCustomerInfo(e.target.value, cart.customerPhone)}
+                  onChange={handleNameChange}
                   placeholder="João Silva"
+                  autoComplete="name"
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 placeholder:text-stone-400 focus:border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-600/20"
                 />
               </div>
@@ -306,9 +397,13 @@ function HomeContent() {
                 <input
                   id="customer-phone"
                   type="tel"
-                  value={cart.customerPhone}
-                  onChange={(e) => cart.setCustomerInfo(cart.customerName, e.target.value)}
+                  inputMode="numeric"
+                  maxLength={15}
+                  value={phoneInput}
+                  onChange={handlePhoneChange}
+                  onKeyDown={blockNonPhoneKeys}
                   placeholder="(11) 99999-9999"
+                  autoComplete="tel"
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 placeholder:text-stone-400 focus:border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-600/20"
                 />
               </div>
